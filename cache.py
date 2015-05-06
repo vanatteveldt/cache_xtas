@@ -10,7 +10,6 @@ from xtas.tasks.es import es_document
 from xtas.tasks.pipeline import pipeline
 from xtas.tasks.single import corenlp_lemmatize
 
-logging.basicConfig(format='[%(asctime)s %(levelname)s %(name)s:%(lineno)s %(threadName)s] %(message)s', level=logging.INFO)
 
 def get_filter(setid, doctype):
     """Create a DSL filter dict to filter on set and no existing parser"""
@@ -36,41 +35,27 @@ def check_mapping(es, index, doctype, parent_doctype):
         body = {doctype : {"_parent" : {"type" : "article"}}}
         indices.IndicesClient(es).put_mapping(index=index, doc_type=doctype, body=body)
 
-def cache_many(pipe, docs, concurrency):
-    docs_q = Queue()
-    errors = {} # dict assignment is thread safe (right?)
-    [docs_q.put(doc) for doc in docs]
-    def cache():
-        while True:
-            try:
-                doc = docs_q.get_nowait()
-            except Empty:
-                break
-            try:
-                logging.info("Proccesing {doc}, approx left: {n}"
-                             .format(n=len(docs_q.queue), **locals()))
-                pipeline(doc, pipe)
-            except Exception, e:
-                logging.warn("Error on processing {doc}: {e}".format(**locals()))
-                errors[doc] = e
-        logging.info("Worker done!")
-    threads = [Thread(name="Worker_{n}".format(**locals()), target=cache)
-               for n in range(concurrency)]
-    [t.start() for t in threads]
-    [t.join() for t in threads]
-    return errors
+def cache_many(pipe, docs):
+    for doc in docs:
+        try:
+            logging.warn("Proccesing {doc}, approx left: {n}"
+                         .format(n=len(docs), **locals()))
+            pipeline(doc, pipe)
+        except Exception:
+            logging.exception("Error on processing {doc}".format(**locals()))
+
+    logging.info("Done!")
 
 if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument('--host', default='amcat.vu.nl')
+    parser.add_argument('--host', default='localhost')
     parser.add_argument('--index', default='amcat')
     parser.add_argument('--parent-doctype', default='article' )
     parser.add_argument('--n', type=int, default=25)
-    parser.add_argument('--concurrency', type=int, default=1)
+    parser.add_argument('--verbose',  action='store_true')
     parser.add_argument('--norepeat', action='store_true')
-    parser.add_argument('--eager', action='store_true')
     parser.add_argument('--single', action='store_true', help="Parse a single article: set argument is interpreted as article id")
 
     parser.add_argument('set', type=int)
@@ -78,8 +63,11 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
+
+    logging.basicConfig(format='[%(asctime)s %(levelname)s %(name)s:%(lineno)s %(threadName)s] %(message)s', level=logging.INFO if args.verbose else logging.WARN)
+    
     from xtas.celery import app
-    app.conf['CELERY_ALWAYS_EAGER'] = args.eager
+    app.conf['CELERY_ALWAYS_EAGER'] = True
 
     pipe = [{"module" : x} for x in args.modules]
 
@@ -91,7 +79,7 @@ if __name__ == '__main__':
         if args.single:
             n, aids = 1, [args.set]
         else:
-            logging.info("Retrieving {args.n} articles".format(**locals()))
+            logging.warn("Retrieving {args.n} articles".format(**locals()))
             try:
                 n, aids = list(get_articles(es, args.index, doctype, args.parent_doctype, args.set, size=args.n))
             except:
@@ -103,7 +91,7 @@ if __name__ == '__main__':
             break
         docs = [es_document(args.index, args.parent_doctype, aid, "text")
                 for aid in aids]
-        cache_many(pipe, docs, args.concurrency)
+        cache_many(pipe, docs)
 
         if args.norepeat or args.single:
             break
