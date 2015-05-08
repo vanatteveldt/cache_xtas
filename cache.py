@@ -72,7 +72,7 @@ if __name__ == '__main__':
     pipe = [{"module" : x} for x in args.modules]
 
     doctype = "__".join([args.parent_doctype] + [m['module'] for m in pipe])
-    es = Elasticsearch(hosts=[{"host":args.host, "port": 9200}])
+    es = Elasticsearch(hosts=[{"host":args.host, "port": 9200}], timeout=600)
     check_mapping(es, args.index, doctype, args.parent_doctype)
 
     while True:
